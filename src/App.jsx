@@ -27,6 +27,8 @@ const DEFAULTS = {
   accent:      "#C9A84C",
   fastSpeed:   30,
   textSize:    32,   // point size for entry name text (12-96)
+  overlayColor:   "#000000",  // background overlay tint
+  overlayOpacity: 45,         // 0-90 %
   fastMaxSec:  20,
   slowSec:     4,
   adminPin:    "",
@@ -48,7 +50,15 @@ const compressImage = (file, maxW = 960) => new Promise(res => {
   fr.readAsDataURL(file);
 });
 
-function drawReel(canvas, offset, entries, stopped, accent, textScale = 1, ready = false) {
+// Convert #rrggbb + alpha(0-1) → rgba() string
+function hexA(hex, a) {
+  const h = (hex || "#000000").replace("#", "");
+  const f = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+  const n = parseInt(f, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+function drawReel(canvas, offset, entries, stopped, accent, textScale = 1, ready = false, shinePhase = 0) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
@@ -149,13 +159,37 @@ function drawReel(canvas, offset, entries, stopped, accent, textScale = 1, ready
   ctx.arc(pillPad + pillR, bY + pillR, pillR, Math.PI/2, -Math.PI/2);
   ctx.closePath();
 
-  // Multi-stop translucent fill for the frosted effect
-  const pillGrad = ctx.createLinearGradient(0, bY, 0, bY + bH);
-  pillGrad.addColorStop(0,   "rgba(255,255,255,0.15)");
-  pillGrad.addColorStop(0.5, "rgba(255,255,255,0.08)");
-  pillGrad.addColorStop(1,   "rgba(255,255,255,0.15)");
-  ctx.fillStyle = pillGrad;
-  ctx.fill();
+  if (stopped) {
+    // WINNER LOCKED: solid gold fill with a travelling shine sweep
+    const pillGrad = ctx.createLinearGradient(pillPad, 0, W - pillPad, 0);
+    let a1 = shinePhase - 0.20, a2 = shinePhase, a3 = shinePhase + 0.20;
+    a1 = Math.min(Math.max(a1, 0), 1);
+    a2 = Math.min(Math.max(a2, a1), 1);
+    a3 = Math.min(Math.max(a3, a2), 1);
+    pillGrad.addColorStop(0,  accent);
+    pillGrad.addColorStop(a1, accent);
+    pillGrad.addColorStop(a2, "#FFF6D0");
+    pillGrad.addColorStop(a3, accent);
+    pillGrad.addColorStop(1,  accent);
+    ctx.fillStyle = pillGrad;
+    ctx.fill();
+    // Top gloss for a metallic curve
+    const gloss = ctx.createLinearGradient(0, bY, 0, bY + bH);
+    gloss.addColorStop(0,    "rgba(255,255,255,0.40)");
+    gloss.addColorStop(0.45, "rgba(255,255,255,0.05)");
+    gloss.addColorStop(0.55, "rgba(0,0,0,0.05)");
+    gloss.addColorStop(1,    "rgba(0,0,0,0.18)");
+    ctx.fillStyle = gloss;
+    ctx.fill();
+  } else {
+    // Idle / spinning: frosted glass
+    const pillGrad = ctx.createLinearGradient(0, bY, 0, bY + bH);
+    pillGrad.addColorStop(0,   "rgba(255,255,255,0.15)");
+    pillGrad.addColorStop(0.5, "rgba(255,255,255,0.08)");
+    pillGrad.addColorStop(1,   "rgba(255,255,255,0.15)");
+    ctx.fillStyle = pillGrad;
+    ctx.fill();
+  }
   ctx.restore();
 
   // Thin gold border on the pill
@@ -167,10 +201,28 @@ function drawReel(canvas, offset, entries, stopped, accent, textScale = 1, ready
   ctx.lineTo(pillPad + pillR, bY + bH);
   ctx.arc(pillPad + pillR, bY + pillR, pillR, Math.PI/2, -Math.PI/2);
   ctx.closePath();
-  ctx.strokeStyle = stopped ? accent : `${accent}bb`;
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = stopped ? "#8a6a12" : `${accent}bb`;
+  ctx.lineWidth = stopped ? 2 : 1.5;
   ctx.stroke();
   ctx.restore();
+
+  // Winner name drawn ON TOP of the gold pill, in black
+  if (stopped && n) {
+    const cIdx = ((Math.floor(offset / slotH) + CROW) % n + n) % n;
+    const cName = entries[cIdx] || "";
+    const cFs = Math.round(Math.max(22, Math.min(W * 0.055, 46)) * textScale) + 4;
+    ctx.save();
+    ctx.translate(W / 2, centerY);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `900 ${cFs}px 'Space Grotesk', sans-serif`;
+    ctx.fillStyle = "#100900";
+    ctx.shadowColor = "rgba(255,255,255,0.35)";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 1;
+    ctx.fillText(cName.length > 44 ? cName.slice(0,42)+"…" : cName, 0, 0);
+    ctx.restore();
+  }
 
   // No vignette — canvas stays fully transparent so the background flows uninterrupted
 
@@ -311,6 +363,21 @@ function DrawPage({ cfg, onAdmin }) {
     rafRef.current = requestAnimationFrame(p1);
   };
 
+  // Animated gold shine sweep while the winner is displayed
+  const shineRafRef = useRef(null);
+  useEffect(() => {
+    if (!stopped) return;
+    let start = null;
+    const loop = ts => {
+      if (!start) start = ts;
+      const phase = ((ts - start) / 2400) % 1;
+      drawReel(canvasRef.current, offsetRef.current, entriesRef.current, true, accent, (cfg.textSize || 32)/32, false, phase);
+      shineRafRef.current = requestAnimationFrame(loop);
+    };
+    shineRafRef.current = requestAnimationFrame(loop);
+    return () => shineRafRef.current && cancelAnimationFrame(shineRafRef.current);
+  }, [stopped, accent, cfg.textSize]);
+
   useEffect(() => () => rafRef.current && cancelAnimationFrame(rafRef.current), []);
 
   const loaded = entries.length > 0;
@@ -350,12 +417,13 @@ function DrawPage({ cfg, onAdmin }) {
         }}/>
       ) : null}
 
-      {/* Subtle vignette — only darkens edges, keeps bg visible in the center */}
+      {/* Configurable overlay tint over the background media */}
       <div style={{
         position:"absolute", inset:0, zIndex:0, pointerEvents:"none",
         background: (cfg.bgVideo || cfg.bgImage)
-          ? "radial-gradient(ellipse at 50% 50%, rgba(0,0,0,.15) 0%, rgba(0,0,0,.55) 100%)"
+          ? hexA(cfg.overlayColor || "#000000", (cfg.overlayOpacity ?? 45) / 100)
           : "radial-gradient(ellipse at 50% 60%, rgba(107,68,0,.55) 0%, rgba(13,8,0,.85) 70%, rgba(0,0,0,.92) 100%)",
+        transition:"background .3s ease",
       }}/>
       <div style={{ position:"relative", zIndex:1, width:"100%", display:"flex", flexDirection:"column", alignItems:"center" }}>
       <style>{`
@@ -752,6 +820,30 @@ function AdminPage({ cfg, onSave, onBack }) {
               }}>REMOVE VIDEO</button>
             )}
           </AdminFld>
+        </AdminSec>
+
+        <AdminSec accent={a} title="BACKGROUND OVERLAY">
+          <p style={{ margin:"0 0 4px", fontSize:".7rem", color:"rgba(255,255,255,.42)", lineHeight:1.55 }}>
+            Tint layered over the background image or video. Raise the strength to darken, lower it to let the media show through.
+          </p>
+          <AdminFld label="OVERLAY COLOR">
+            <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:10 }}>
+              {[{l:"Black",c:"#000000"},{l:"Charcoal",c:"#1C1C22"},{l:"Navy",c:"#0B1A33"},{l:"Brown",c:"#2B1A08"},{l:"Wine",c:"#2A0A12"},{l:"White",c:"#FFFFFF"}].map(p => (
+                <div key={p.c} onClick={()=>set("overlayColor",p.c)} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:6, cursor:"pointer" }}>
+                  <div style={{
+                    width:36, height:36, borderRadius:"50%", background:p.c, transition:"all .2s",
+                    border: (s.overlayColor||"#000000").toLowerCase()===p.c.toLowerCase() ? "3px solid #fff" : "3px solid rgba(255,255,255,.18)",
+                  }}/>
+                  <span style={{ fontSize:".5rem", color:"rgba(255,255,255,.38)", letterSpacing:".06em" }}>{p.l}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              <input style={{...ADMIN_INP, flex:1}} value={s.overlayColor || "#000000"} onChange={e=>set("overlayColor",e.target.value)} placeholder="#000000"/>
+              <div style={{ width:38, height:38, borderRadius:6, background:s.overlayColor || "#000000", border:"1px solid rgba(255,255,255,.18)", flexShrink:0 }}/>
+            </div>
+          </AdminFld>
+          <AdminSlider label="OVERLAY STRENGTH" min={0} max={90} unit="%" value={s.overlayOpacity ?? 45} onChange={v=>set("overlayOpacity",v)} accent={a}/>
         </AdminSec>
 
         <AdminSec accent={a} title="DRAW PAGE">
