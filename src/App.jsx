@@ -58,7 +58,7 @@ function hexA(hex, a) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
-function drawReel(canvas, offset, entries, stopped, accent, textScale = 1, ready = false, shinePhase = 0) {
+function drawReel(canvas, offset, entries, stopped, accent, textScale = 1, ready = false, shinePhase = 0, winnerName = null) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
@@ -116,26 +116,25 @@ function drawReel(canvas, offset, entries, stopped, accent, textScale = 1, ready
     const baseFs = Math.max(22, Math.min(W * 0.055, 46)) * textScale;
     const fs     = Math.round(baseFs * scale);
 
+    const name = entries[idx] || "";
+    // When stopped, hide ALL scrolling names — only the winner pill shows.
+    if (stopped) continue;
     ctx.save();
     ctx.translate(W/2, rowcenterY);
-    ctx.scale(scale, scale);
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    if (isC && stopped) {
-      ctx.font = `900 ${fs+4}px 'Space Grotesk', sans-serif`;
-      ctx.fillStyle = accent;
-      ctx.shadowColor = accent; ctx.shadowBlur = 28;
-      ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
-    } else {
-      ctx.font = `700 ${fs}px 'Inter', sans-serif`;
-      ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-      // Sharp dark drop shadow for readability — no blur so text stays crisp
-      ctx.shadowColor = "rgba(0,0,0,0.85)";
-      ctx.shadowBlur = 0;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 2;
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.shadowColor = "rgba(0,0,0,0.85)";
+    ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 2;
+    // Font already includes proximity scale (fs). Shrink further only if the name
+    // would poke past the tumbler width, so nothing spills past the pill.
+    let rowFs = Math.round(fs);
+    const rowMaxW = (W - 2*40) - 20;
+    ctx.font = `700 ${rowFs}px 'Inter', sans-serif`;
+    while (rowFs > 10 && ctx.measureText(name).width > rowMaxW) {
+      rowFs -= 1;
+      ctx.font = `700 ${rowFs}px 'Inter', sans-serif`;
     }
-    const name = entries[idx] || "";
-    ctx.fillText(name.length > 44 ? name.slice(0,42)+"…" : name, 0, 0);
+    ctx.fillText(name, 0, 0);
     ctx.shadowBlur = 0;
     ctx.restore();
   }
@@ -206,10 +205,11 @@ function drawReel(canvas, offset, entries, stopped, accent, textScale = 1, ready
   ctx.stroke();
   ctx.restore();
 
-  // Winner name drawn ON TOP of the gold pill, in black
-  if (stopped && n) {
-    const cIdx = ((Math.floor(offset / slotH) + CROW) % n + n) % n;
-    const cName = entries[cIdx] || "";
+  // Winner name drawn ON TOP of the gold pill, in black.
+  // Uses the ACTUAL selected winner (passed in) — never scroll-position math,
+  // so the displayed name is always exactly who was picked.
+  if (stopped && winnerName) {
+    const cName = winnerName;
     let cFs = Math.round(Math.max(22, Math.min(W * 0.055, 46)) * textScale) + 4;
     ctx.save();
     ctx.translate(W / 2, centerY);
@@ -270,7 +270,7 @@ function DrawPage({ cfg, onAdmin }) {
 
   const { accent } = cfg;
 
-  const redraw = () => drawReel(canvasRef.current, offsetRef.current, entriesRef.current, stopped, accent, (cfg.textSize || 32)/32, !hasStarted && entriesRef.current.length > 0);
+  const redraw = () => drawReel(canvasRef.current, offsetRef.current, entriesRef.current, stopped, accent, (cfg.textSize || 32)/32, !hasStarted && entriesRef.current.length > 0, 0, winner);
 
   useEffect(() => {
     const resize = () => {
@@ -347,6 +347,8 @@ function DrawPage({ cfg, onAdmin }) {
     offsetRef.current = 0;
     setHasStarted(true);
     setSpinning(true); setStopped(false); setWinner(null);
+    // Immediately clear the old winner frame so no stale name flashes on REDRAW
+    drawReel(canvasRef.current, 0, entriesRef.current, false, accent, (cfg.textSize || 32)/32, false, 0, null);
 
     let t1 = null, t2 = null;
     const p1 = ts => {
@@ -363,7 +365,7 @@ function DrawPage({ cfg, onAdmin }) {
       drawReel(canvasRef.current, offsetRef.current, entriesRef.current, false, accent, (cfg.textSize || 32)/32);
       if (t < 1) { rafRef.current = requestAnimationFrame(p2); return; }
       offsetRef.current = finOff;
-      drawReel(canvasRef.current, finOff, entriesRef.current, true, accent, (cfg.textSize || 32)/32);
+      drawReel(canvasRef.current, finOff, entriesRef.current, true, accent, (cfg.textSize || 32)/32, false, 0, wName);
       setSpinning(false); setStopped(true); setWinner(wName);
     };
     rafRef.current = requestAnimationFrame(p1);
@@ -377,7 +379,7 @@ function DrawPage({ cfg, onAdmin }) {
     const loop = ts => {
       if (!start) start = ts;
       const phase = ((ts - start) / 2400) % 1;
-      drawReel(canvasRef.current, offsetRef.current, entriesRef.current, true, accent, (cfg.textSize || 32)/32, false, phase);
+      drawReel(canvasRef.current, offsetRef.current, entriesRef.current, true, accent, (cfg.textSize || 32)/32, false, phase, winner);
       shineRafRef.current = requestAnimationFrame(loop);
     };
     shineRafRef.current = requestAnimationFrame(loop);
