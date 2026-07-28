@@ -210,17 +210,23 @@ function drawReel(canvas, offset, entries, stopped, accent, textScale = 1, ready
   if (stopped && n) {
     const cIdx = ((Math.floor(offset / slotH) + CROW) % n + n) % n;
     const cName = entries[cIdx] || "";
-    const cFs = Math.round(Math.max(22, Math.min(W * 0.055, 46)) * textScale) + 4;
+    let cFs = Math.round(Math.max(22, Math.min(W * 0.055, 46)) * textScale) + 4;
     ctx.save();
     ctx.translate(W / 2, centerY);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = `900 ${cFs}px 'Space Grotesk', sans-serif`;
     ctx.fillStyle = "#100900";
     ctx.shadowColor = "rgba(255,255,255,0.35)";
     ctx.shadowBlur = 0;
     ctx.shadowOffsetY = 1;
-    ctx.fillText(cName.length > 44 ? cName.slice(0,42)+"…" : cName, 0, 0);
+    // Shrink font until the name fits inside the pill (with padding on both ends)
+    const maxTextW = (W - 2*pillPad - 2*pillR) - 24;
+    ctx.font = `900 ${cFs}px 'Space Grotesk', sans-serif`;
+    while (cFs > 12 && ctx.measureText(cName).width > maxTextW) {
+      cFs -= 1;
+      ctx.font = `900 ${cFs}px 'Space Grotesk', sans-serif`;
+    }
+    ctx.fillText(cName, 0, 0);
     ctx.restore();
   }
 
