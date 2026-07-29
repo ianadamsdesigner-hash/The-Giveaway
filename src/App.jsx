@@ -259,6 +259,8 @@ function DrawPage({ cfg, onAdmin }) {
   const offsetRef    = useRef(0);
   const entriesRef   = useRef([]);
   const rafRef       = useRef(null);
+  const modeRef      = useRef("idle");  // "idle" | "spin" | "shine" — only one loop paints
+  const shineRafRef  = useRef(null);
 
   const [entries,    setEntries]    = useState([]);
   const [spinning,   setSpinning]   = useState(false);
@@ -347,11 +349,16 @@ function DrawPage({ cfg, onAdmin }) {
     offsetRef.current = 0;
     setHasStarted(true);
     setSpinning(true); setStopped(false); setWinner(null);
+    // Claim spin mode and stop any running shine loop so only ONE loop paints
+    modeRef.current = "spin";
+    if (shineRafRef.current) cancelAnimationFrame(shineRafRef.current);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
     // Immediately clear the old winner frame so no stale name flashes on REDRAW
     drawReel(canvasRef.current, 0, entriesRef.current, false, accent, (cfg.textSize || 32)/32, false, 0, null);
 
     let t1 = null, t2 = null;
     const p1 = ts => {
+      if (modeRef.current !== "spin") return;
       if (!t1) t1 = ts;
       const t = Math.min((ts-t1)/(fastSec*1000),1);
       offsetRef.current = t * fastDist;
@@ -359,12 +366,14 @@ function DrawPage({ cfg, onAdmin }) {
       t < 1 ? (rafRef.current = requestAnimationFrame(p1)) : (rafRef.current = requestAnimationFrame(p2));
     };
     const p2 = ts => {
+      if (modeRef.current !== "spin") return;
       if (!t2) t2 = ts;
       const t = Math.min((ts-t2)/slowMs, 1);
       offsetRef.current = fastDist + easeOut(t)*(finOff-fastDist);
       drawReel(canvasRef.current, offsetRef.current, entriesRef.current, false, accent, (cfg.textSize || 32)/32);
       if (t < 1) { rafRef.current = requestAnimationFrame(p2); return; }
       offsetRef.current = finOff;
+      modeRef.current = "shine";
       drawReel(canvasRef.current, finOff, entriesRef.current, true, accent, (cfg.textSize || 32)/32, false, 0, wName);
       setSpinning(false); setStopped(true); setWinner(wName);
     };
@@ -372,11 +381,14 @@ function DrawPage({ cfg, onAdmin }) {
   };
 
   // Animated gold shine sweep while the winner is displayed
-  const shineRafRef = useRef(null);
   useEffect(() => {
     if (!stopped) return;
+    // Claim shine mode and stop any running spin loop so only ONE loop paints
+    modeRef.current = "shine";
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
     let start = null;
     const loop = ts => {
+      if (modeRef.current !== "shine") return;   // stale-frame guard
       if (!start) start = ts;
       const phase = ((ts - start) / 2400) % 1;
       drawReel(canvasRef.current, offsetRef.current, entriesRef.current, true, accent, (cfg.textSize || 32)/32, false, phase, winner);
@@ -384,7 +396,7 @@ function DrawPage({ cfg, onAdmin }) {
     };
     shineRafRef.current = requestAnimationFrame(loop);
     return () => shineRafRef.current && cancelAnimationFrame(shineRafRef.current);
-  }, [stopped, accent, cfg.textSize]);
+  }, [stopped, accent, cfg.textSize, winner]);
 
   useEffect(() => () => rafRef.current && cancelAnimationFrame(rafRef.current), []);
 
@@ -555,6 +567,9 @@ function DrawPage({ cfg, onAdmin }) {
             }}>REDRAW</button>
             <button onClick={()=>{
               // Full reset — clear list, back to upload state
+              modeRef.current = "idle";
+              if (rafRef.current) cancelAnimationFrame(rafRef.current);
+              if (shineRafRef.current) cancelAnimationFrame(shineRafRef.current);
               setWinner(null); setStopped(false); setHasStarted(false);
               entriesRef.current = [];
               setEntries([]);
