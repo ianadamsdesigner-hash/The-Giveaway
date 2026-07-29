@@ -399,7 +399,7 @@ function DrawPage({ cfg, onAdmin }) {
       shineRafRef.current = requestAnimationFrame(loop);
     };
     shineRafRef.current = requestAnimationFrame(loop);
-    return () => { runIdRef.current++; if (shineRafRef.current) cancelAnimationFrame(shineRafRef.current); };
+    return () => { if (shineRafRef.current) cancelAnimationFrame(shineRafRef.current); };
   }, [stopped, accent, cfg.textSize, winner]);
 
   useEffect(() => () => rafRef.current && cancelAnimationFrame(rafRef.current), []);
