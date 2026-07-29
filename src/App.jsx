@@ -259,8 +259,6 @@ function DrawPage({ cfg, onAdmin }) {
   const offsetRef    = useRef(0);
   const entriesRef   = useRef([]);
   const rafRef       = useRef(null);
-  const modeRef      = useRef("idle");  // "idle" | "spin" | "shine" — only one loop paints
-  const shineRafRef  = useRef(null);
   const runIdRef     = useRef(0);  // generation id — stale loops self-terminate
 
   const [entries,    setEntries]    = useState([]);
@@ -350,59 +348,50 @@ function DrawPage({ cfg, onAdmin }) {
     offsetRef.current = 0;
     setHasStarted(true);
     setSpinning(true); setStopped(false); setWinner(null);
-    // New generation: any older spin/shine loop still in flight will self-terminate
+
+    // ONE unified animation loop owns the canvas: spin → slowdown → shine.
+    // A single generation id kills any previous loop; there is never a 2nd loop.
     const myRun = ++runIdRef.current;
-    modeRef.current = "spin";
-    if (shineRafRef.current) cancelAnimationFrame(shineRafRef.current);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    // Immediately clear the old winner frame so no stale name flashes on REDRAW
     drawReel(canvasRef.current, 0, entriesRef.current, false, accent, (cfg.textSize || 32)/32, false, 0, null);
 
-    let t1 = null, t2 = null;
-    const p1 = ts => {
-      if (myRun !== runIdRef.current) return;   // stale loop → die, no reschedule
-      if (!t1) t1 = ts;
-      const t = Math.min((ts-t1)/(fastSec*1000),1);
-      offsetRef.current = t * fastDist;
-      drawReel(canvasRef.current, offsetRef.current, entriesRef.current, false, accent, (cfg.textSize || 32)/32);
-      t < 1 ? (rafRef.current = requestAnimationFrame(p1)) : (rafRef.current = requestAnimationFrame(p2));
+    const ts = cfg.textSize || 32;
+    let phase = "fast";     // "fast" → "slow" → "shine"
+    let t1 = null, t2 = null, shineStart = null;
+
+    const frame = now => {
+      if (myRun !== runIdRef.current) return;   // superseded → stop entirely
+
+      if (phase === "fast") {
+        if (!t1) t1 = now;
+        const t = Math.min((now - t1) / (fastSec * 1000), 1);
+        offsetRef.current = t * fastDist;
+        drawReel(canvasRef.current, offsetRef.current, entriesRef.current, false, accent, ts/32);
+        if (t >= 1) phase = "slow";
+      } else if (phase === "slow") {
+        if (!t2) t2 = now;
+        const t = Math.min((now - t2) / slowMs, 1);
+        offsetRef.current = fastDist + easeOut(t) * (finOff - fastDist);
+        drawReel(canvasRef.current, offsetRef.current, entriesRef.current, false, accent, ts/32);
+        if (t >= 1) {
+          offsetRef.current = finOff;
+          phase = "shine";
+          setSpinning(false); setStopped(true); setWinner(wName);
+        }
+      } else {
+        // shine: winner locked, animate the gold sweep
+        if (!shineStart) shineStart = now;
+        const sp = ((now - shineStart) / 2400) % 1;
+        drawReel(canvasRef.current, finOff, entriesRef.current, true, accent, ts/32, false, sp, wName);
+      }
+
+      rafRef.current = requestAnimationFrame(frame);
     };
-    const p2 = ts => {
-      if (myRun !== runIdRef.current) return;   // stale loop → die, no reschedule
-      if (!t2) t2 = ts;
-      const t = Math.min((ts-t2)/slowMs, 1);
-      offsetRef.current = fastDist + easeOut(t)*(finOff-fastDist);
-      drawReel(canvasRef.current, offsetRef.current, entriesRef.current, false, accent, (cfg.textSize || 32)/32);
-      if (t < 1) { rafRef.current = requestAnimationFrame(p2); return; }
-      if (myRun !== runIdRef.current) return;
-      offsetRef.current = finOff;
-      modeRef.current = "shine";
-      drawReel(canvasRef.current, finOff, entriesRef.current, true, accent, (cfg.textSize || 32)/32, false, 0, wName);
-      setSpinning(false); setStopped(true); setWinner(wName);
-    };
-    rafRef.current = requestAnimationFrame(p1);
+    rafRef.current = requestAnimationFrame(frame);
   };
 
-  // Animated gold shine sweep while the winner is displayed
-  useEffect(() => {
-    if (!stopped) return;
-    // New generation for the shine loop; kills any spin loop still in flight
-    const myRun = ++runIdRef.current;
-    modeRef.current = "shine";
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    let start = null;
-    const loop = ts => {
-      if (myRun !== runIdRef.current) return;   // stale loop → die, no reschedule
-      if (!start) start = ts;
-      const phase = ((ts - start) / 2400) % 1;
-      drawReel(canvasRef.current, offsetRef.current, entriesRef.current, true, accent, (cfg.textSize || 32)/32, false, phase, winner);
-      shineRafRef.current = requestAnimationFrame(loop);
-    };
-    shineRafRef.current = requestAnimationFrame(loop);
-    return () => { if (shineRafRef.current) cancelAnimationFrame(shineRafRef.current); };
-  }, [stopped, accent, cfg.textSize, winner]);
-
-  useEffect(() => () => rafRef.current && cancelAnimationFrame(rafRef.current), []);
+  // Cleanup on unmount only
+  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
   const loaded = entries.length > 0;
 
@@ -572,9 +561,7 @@ function DrawPage({ cfg, onAdmin }) {
             <button onClick={()=>{
               // Full reset — clear list, back to upload state
               runIdRef.current++;
-              modeRef.current = "idle";
               if (rafRef.current) cancelAnimationFrame(rafRef.current);
-              if (shineRafRef.current) cancelAnimationFrame(shineRafRef.current);
               setWinner(null); setStopped(false); setHasStarted(false);
               entriesRef.current = [];
               setEntries([]);
