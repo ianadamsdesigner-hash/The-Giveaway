@@ -271,27 +271,44 @@ function DrawPage({ cfg, onAdmin }) {
 
   const { accent } = cfg;
 
-  const redraw = () => drawReel(canvasRef.current, offsetRef.current, entriesRef.current, stopped, accent, (cfg.textSize || 32)/32, !hasStarted && entriesRef.current.length > 0, 0, winner);
+  // Latest draw state in a ref — lets the mount-once resize handler repaint
+  // correctly without stale closures and without re-running on every render.
+  const drawStateRef = useRef({});
+  drawStateRef.current = {
+    stopped, winner, accent,
+    textScale: (cfg.textSize || 32) / 32,
+    ready: !hasStarted && entries.length > 0,
+    animating: spinning,
+  };
 
   useEffect(() => {
     const resize = () => {
       if (!containerRef.current || !canvasRef.current) return;
       const w = Math.min(containerRef.current.clientWidth, CONTAINER_MAX);
-      // Fit in viewport: canvas height = 60% of viewport height, capped
       const vh = window.innerHeight;
       const targetH = Math.max(360, Math.min(vh * 0.60, w * 0.85, 620));
-      // HiDPI: render at devicePixelRatio for razor-sharp text on Retina
       const dpr = window.devicePixelRatio || 1;
-      canvasRef.current.width  = Math.round(w * dpr);
-      canvasRef.current.height = Math.round(targetH * dpr);
-      canvasRef.current.style.width  = w + "px";
-      canvasRef.current.style.height = targetH + "px";
-      redraw();
+      const pw = Math.round(w * dpr), ph = Math.round(targetH * dpr);
+      // Only touch canvas dims if they ACTUALLY changed — assigning width/height
+      // wipes the canvas, which caused stutter when this ran mid-animation.
+      if (canvasRef.current.width !== pw || canvasRef.current.height !== ph) {
+        canvasRef.current.width  = pw;
+        canvasRef.current.height = ph;
+        canvasRef.current.style.width  = w + "px";
+        canvasRef.current.style.height = targetH + "px";
+        // Repaint from the latest state ref — but never while the animation
+        // loop is running (it repaints every frame anyway).
+        const st = drawStateRef.current;
+        if (!st.animating) {
+          drawReel(canvasRef.current, offsetRef.current, entriesRef.current,
+            st.stopped, st.accent, st.textScale, st.ready, 0, st.winner);
+        }
+      }
     };
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  });
+  }, []);
 
   const handleUpload = e => {
     const file = e.target.files[0];
